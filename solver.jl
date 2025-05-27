@@ -1,5 +1,5 @@
 # Solver
-function solve(F_macro, mp_i, mp_m, mesh_filename; output=:false)
+function solve(F_macro, mp_i, mp_m, mesh_filename; steps=10, output=:false)
     # Read mesh from file
     grid = togrid(mesh_filename)
 
@@ -38,36 +38,42 @@ function solve(F_macro, mp_i, mp_m, mesh_filename; output=:false)
     g = zeros(_ndofs)
 
     # Perform Newton iterations
-    newton_itr = -1
     NEWTON_TOL = 1.0e-8
     NEWTON_MAXITER = 30
-    prog = ProgressMeter.ProgressThresh(NEWTON_TOL; desc = "Solving:")
+    F_step = Tensor{2, 2}([0.0 0.0; 0.0 0.0])
+    F_inc = 1/steps * F_macro
 
-    while true
-        newton_itr += 1
-        # Construct the current guess
-        u .= un .+ Δu
-        # Compute residual and tangent for current guess
-        assemble_global!(K, g, dh, cv, F_macro, mp_i, mp_m, u, states)
-        # Apply boundary conditions
-        apply!(K, g, ch)
-        # Compute the residual norm and compare with tolerance
-        normg = norm(g) # alternative convergence criterium?? incremental...
+    for _ in 1:steps
+        newton_itr = -1
+        F_step += F_inc
 
-        ProgressMeter.update!(prog, normg; showvalues = [(:iter, newton_itr)])
+        while true
+            newton_itr += 1
+            # Construct the current guess
+            u .= un .+ Δu
+            # Compute residual and tangent for current guess
+            assemble_global!(K, g, dh, cv, F_step, mp_i, mp_m, u, states)
+            # Apply boundary conditions
+            apply!(K, g, ch)
+            # Compute the residual norm and compare with tolerance
+            normg = norm(g) 
 
-        if normg < NEWTON_TOL
-            break
-        elseif newton_itr > NEWTON_MAXITER
-            error("Reached maximum Newton iterations, aborting")
-        end
+            if normg < NEWTON_TOL
+                if(output)
+                    println("Converged at iteration $newton_itr with residual $(@sprintf("%.4e", normg))")
+                end
+                break
+            elseif newton_itr > NEWTON_MAXITER
+                error("Reached maximum Newton iterations, aborting")
+            end
 
-        # Compute increment using conjugate gradients
-        IterativeSolvers.cg!(ΔΔu, K, g; maxiter = 1000)
-        #ΔΔu = K\g # not better or worse compared to cg...
+            # Compute increment using conjugate gradients
+            IterativeSolvers.cg!(ΔΔu, K, g; maxiter = 1000)
 
-        apply!(ΔΔu, ch)
-        Δu .-= ΔΔu
+            apply!(ΔΔu, ch)
+            Δu .-= ΔΔu
+        end # of while loop
+
     end
 
     # Calculate averages
